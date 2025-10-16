@@ -1,97 +1,59 @@
 import React, { useEffect, useState } from 'react';
 import Header from './components/Header';
 import ChatBox from './components/ChatBox';
-import ChatHistory from './components/ChatHistory';
-import FeedbackModal from './components/FeedbackModal';
-import { login, register, getHistory, logMessage, submitFeedback } from './api';
+import { chat } from './api';
 
 export default function App() {
-  const [user, setUser] = useState(() => {
-    try {
-      return JSON.parse(localStorage.getItem('mh_user'));
-    } catch { return null; }
-  });
-  const [token, setToken] = useState(() => localStorage.getItem('mh_token') || null);
-  const [history, setHistory] = useState([]);
-  const [showFeedback, setShowFeedback] = useState(false);
-
-  useEffect(() => {
-    if (user && token) {
-      loadHistory();
-    }
-  }, [user, token]);
-
-  async function loadHistory() {
-    const res = await getHistory(token);
-    if (res && res.history) setHistory(res.history);
-  }
-
-  async function handleLogin(username, password, isRegister=false) {
-    try {
-      const res = isRegister ? await register(username, password) : await login(username, password);
-      if (res && res.token) {
-        setUser(res.user);
-        setToken(res.token);
-        localStorage.setItem('mh_user', JSON.stringify(res.user));
-        localStorage.setItem('mh_token', res.token);
-      } else {
-        alert(res.error || 'Login/Register failed');
-      }
-    } catch (err) {
-      console.error(err);
-      alert('Request failed');
-    }
-  }
+  const [messages, setMessages] = useState(() => []);
+  const [pending, setPending] = useState(false);
 
   async function handleSendMessage(text) {
-    // Log user message to backend
-    if (token) {
-      await logMessage(token, 'user', text);
-      loadHistory();
-    }
-
-    // Open chatbase widget and prefill / focus so user can continue in widget
-    if (window.chatbase && typeof window.chatbase === 'function') {
-      try {
-        // If chatbase API supports sending messages, we try; otherwise open widget.
-        if (window.chatbase('isInitialized')) {
-          // some embed scripts expose methods; if not, fallback to open
-          try { window.chatbase('chat.open'); } catch { window.chatbase('open'); }
-        } else {
-          window.chatbase('open');
-        }
-      } catch (e) {
-        // fallback: open
-        try { window.chatbase('open'); } catch {}
-      }
-    } else {
-      // If embed not loaded, instruct user
-      alert('Chat widget loading — open the floating chat on bottom-right to continue.');
+    const userMsg = { id: Date.now() + '-u', role: 'user', message: text, created_at: new Date().toISOString() };
+    setMessages(m => [...m, userMsg]);
+    setPending(true);
+    try {
+      const res = await chat(text);
+      const reply = {
+        id: Date.now() + '-b',
+        role: 'bot',
+        message: res.reply || 'Sorry, I could not generate a response right now.',
+        created_at: new Date().toISOString()
+      };
+      setMessages(m => [...m, reply]);
+    } catch (e) {
+      const errMsg = { id: Date.now() + '-e', role: 'bot', message: 'Network error. Please try again.', created_at: new Date().toISOString() };
+      setMessages(m => [...m, errMsg]);
+    } finally {
+      setPending(false);
     }
   }
 
-  async function handleFeedback(data) {
-    if (!token) return alert('Please login to send feedback');
-    await submitFeedback(token, data.convo_id, data.rating, data.note);
-    setShowFeedback(false);
-    alert('Thanks for your feedback — it helps improve the assistant.');
-  }
+  useEffect(() => {
+    const el = document.querySelector('.chat-scroll');
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [messages, pending]);
 
   return (
-    <div className="app-root">
-      <Header user={user} onAuth={handleLogin} onLogout={() => { setUser(null); setToken(null); localStorage.removeItem('mh_user'); localStorage.removeItem('mh_token'); }} />
-      <main className="main-grid">
-        <section className="left-col">
+    <div className="full-chat">
+      <Header />
+      <div className="chat-layout">
+        <div className="chat-scroll">
+          <ul className="history-list">
+            {messages.map(m => (
+              <li key={m.id} className={`msg ${m.role}`}>
+                <div className="meta">{m.role === 'user' ? 'You' : 'Assistant'} • <span className="time">{new Date(m.created_at).toLocaleString()}</span></div>
+                <div className="text">{m.message}</div>
+              </li>
+            ))}
+            {pending && (
+              <li className="msg bot"><div className="typing"><span className="dot" /><span className="dot" /><span className="dot" /></div></li>
+            )}
+          </ul>
+        </div>
+        <div className="input-dock">
           <ChatBox onSend={handleSendMessage} />
-        </section>
-
-        <aside className="right-col">
-          <ChatHistory history={history} />
-          <button className="feedback-btn" onClick={() => setShowFeedback(true)}>Give Feedback</button>
-        </aside>
-      </main>
-
-      {showFeedback && <FeedbackModal onClose={() => setShowFeedback(false)} onSubmit={handleFeedback} />}
+        </div>
+      </div>
     </div>
   );
 }
